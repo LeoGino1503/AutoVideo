@@ -1,0 +1,22 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.7.4
+python-dotenv==1.0.1
+requests==2.32.3
+PyYAML==6.0.2
+Pillow==10.4.0
+moviepy==2.1.1
+edge-tts==7.2.8
+
+# LLM / text generation (Ollama HTTP API)
+
+# Ollama calls are done via HTTP using `requests`, no extra deps needed.
+
+# YouTube upload (optional at runtime)
+google-api-python-client==2.132.0
+google-auth-oauthlib==1.2.1
+google-auth==2.35.0
+python-multipart==0.0.22
+
+# ElevenLabs TTS (optional; enable in config.yaml + ELEVENLABS_API_KEY)
+elevenlabs>=1.50.0

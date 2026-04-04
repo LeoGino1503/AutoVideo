@@ -1,0 +1,54 @@
+# AutoVideo: non-secret defaults. API keys live in `.env` only.
+# Override path: env `AUTOVIDEO_CONFIG=/path/to/custom.yaml`
+
+ollama:
+  url: http://host.docker.internal:11434
+  model: llama3.1:8b
+  enabled: false
+
+gemini:
+  model: gemini-3-flash-preview
+  enabled: true
+
+pexels:
+  # photo -> /v1/search (photos); video -> /v1/videos/search
+  # media: photo
+  media: video
+  video_orientation: portrait
+  # optional: large | medium | small
+  video_size: ""
+  video_per_page: 3
+
+paths:
+  output_dir: output
+  # empty: ~/.cache/autovideo/images
+  image_cache_dir: ""
+
+micro_story:
+  json_file_name: micro_story.json
+
+image:
+  provider: pexels_unsplash
+
+tts:
+  enabled: true
+  default_voice:
+    voice: vi-VN-HoaiMyNeural
+  # Priority: ElevenLabs when enabled + ELEVENLABS_API_KEY in .env; else Edge TTS.
+  elevenlabs:
+    enabled: true
+    voice_id: JBFqnCBsd6RMkjVDRZzb
+    # Thử primary trước; lỗi / output lỗi thì tự động thử secondary.
+    model_id_primary: eleven_v3
+    # API dùng gạch dưới, không phải dấu chấm (vd. eleven_turbo_v2_5).
+    model_id_secondary: eleven_turbo_v2_5
+    output_format: mp3_44100_128
+
+youtube:
+  upload: false
+  client_secret_path: client_secret.json
+  channel_id: ""
+  title_prefix: Murphy
+  description: "Daily Murphy's Law micro-story."
+  tags: "murphys law,shorts,viral"
+  privacy_status: private
