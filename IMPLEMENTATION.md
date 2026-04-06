@@ -29,7 +29,8 @@ AutoVideo/
     pipeline.py
     pipeline_steps.py
     script_schema.py
-    audio_probe.py
+    utils/ffmpeg.py
+    utils/audio_duration.py
     llm/ollama_client.py
     images/pexels_unsplash.py
     tts/

@@ -6,6 +6,7 @@ requests==2.32.3
 PyYAML==6.0.2
 Pillow==10.4.0
 moviepy==2.1.1
+imageio-ffmpeg>=0.4.9
 edge-tts==7.2.8
 
 # LLM / text generation (Ollama HTTP API)

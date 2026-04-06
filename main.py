@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
-
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from utils.schemas import (
     BuildScriptResponse,
-    FullPipelineRequest,
-    FullPipelineResponse,
-    JobStatusResponse,
+    EndToEndPipelineResponse,
+    PipelinePaths,
     RenderResponse,
     StepOkResponse,
 )
@@ -21,16 +17,53 @@ from src.microstory.service import (
     _load_micro_story,
 )
 from src.media.service import _fetch_media_for_story
-from src.utils.helper import _create_job_id, _make_paths_for_api_job, _ensure_dirs, _require_job
+from src.utils.helper import (
+    _create_job_id,
+    _make_paths_for_api_job,
+    _require_job,
+    ensure_dirs,
+    slug,
+)
 from pathlib import Path
 from src.media.pexels_unsplash import ImageProvider
-from src.tts.service import _synth_audio_for_story, _sync_micro_story_durations_from_audio
+from src.tts.service import _synth_audio_for_story
+from src.utils.scene_paths import list_scene_audio_paths, list_scene_media_paths
+from googleapiclient.errors import HttpError
+from video.render_moviepy import render_final_concat_mux
+from src.youtube.upload import upload_to_youtube
+
 load_dotenv()
 load_yaml_config()
 
 
-# def _quote_from_in(q: QuoteIn) -> QuoteItem:
-#     return QuoteItem(id=q.id, quote=q.quote, meaning_vi=q.meaning_vi)
+def _render_job(paths: PipelinePaths, job_id: str, quote_id: str) -> RenderResponse:
+    story = _load_micro_story(paths)
+    ensure_dirs(paths)
+    n = len(story.scenes)
+    try:
+        media_paths = list_scene_media_paths(paths, n)
+        audio_paths = list_scene_audio_paths(paths, n)
+        out = render_final_concat_mux(
+            rendered_dir=paths.rendered_dir,
+            quote_id=slug(quote_id),
+            media_paths=media_paths,
+            audio_paths=audio_paths,
+            micro_story=story,
+            pipeline_paths=paths,
+            micro_story_quote_id=quote_id,
+        )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    root = Path(cfg_str("paths", "output_dir")).resolve()
+    rel = out.resolve().relative_to(root)
+    return RenderResponse(
+        job_id=job_id,
+        quote_id=quote_id,
+        video_filename=out.name,
+        video_rel_path=str(rel),
+    )
+
 
 app = FastAPI(
     title="AutoVideo API",
@@ -62,17 +95,64 @@ def post_build_script_from_txt(
     Returns:
         A `BuildScriptResponse` object.
     """
-    job_id = _create_job_id()   
-    quote_id = file.filename.split(".")[0]
+    job_id = _create_job_id()
+    quote_id = (file.filename or "script").rsplit(".", 1)[0]
     paths = _make_paths_for_api_job(Path(cfg_str("paths", "output_dir")), job_id)
-    _ensure_dirs(paths)
+    ensure_dirs(paths)
     text_content = file.file.read().decode("utf-8").strip()
-    story = _build_micro_story(text_content)
+    if not text_content:
+        raise HTTPException(status_code=400, detail="File is empty or whitespace only.")
+    try:
+        story = _build_micro_story(text_content, quote_id=quote_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     _save_micro_story(paths, story, quote_id)
     return BuildScriptResponse(
         job_id=job_id,
         quote_id=quote_id,
         micro_story=story.model_dump(),
+    )
+
+
+@app.post("/api/v1/jobs/full-from-txt", response_model=EndToEndPipelineResponse)
+def post_full_pipeline_from_txt(
+    file: UploadFile = File(...),
+    tts_enabled: bool | None = None,
+) -> EndToEndPipelineResponse:
+    """
+    Một request: upload ``.txt`` → tạo job, build script, tải media, TTS, render MP4 cuối.
+    Query ``tts_enabled`` (optional) giống bước ``/tts``; mặc định theo config.
+    """
+    job_id = _create_job_id()
+    quote_id = (file.filename or "script").rsplit(".", 1)[0]
+    paths = _make_paths_for_api_job(Path(cfg_str("paths", "output_dir")), job_id)
+    ensure_dirs(paths)
+    text_content = file.file.read().decode("utf-8").strip()
+    if not text_content:
+        raise HTTPException(status_code=400, detail="File is empty or whitespace only.")
+    try:
+        story = _build_micro_story(text_content, quote_id=quote_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _save_micro_story(paths, story, quote_id)
+
+    provider = ImageProvider.from_env(name=cfg_str("image", "provider", default="pexels_unsplash"))
+    _fetch_media_for_story(story, paths, provider)
+
+    use_tts = (
+        tts_enabled
+        if tts_enabled is not None
+        else cfg_bool("tts", "enabled", default=True)
+    )
+    _synth_audio_for_story(story, paths, tts_enabled=use_tts)
+
+    rendered = _render_job(paths, job_id, quote_id)
+    return EndToEndPipelineResponse(
+        job_id=rendered.job_id,
+        quote_id=rendered.quote_id,
+        micro_story=story.model_dump(),
+        video_filename=rendered.video_filename,
+        video_rel_path=rendered.video_rel_path,
     )
 
 
@@ -111,10 +191,12 @@ def post_tts(job_id: str, tts_enabled: bool | None = None) -> StepOkResponse:
     paths, meta = _require_job(job_id)
     quote_id = str(meta["quote_id"])
     story = _load_micro_story(paths)
-    tts_enabled = cfg_bool("tts", "enabled", default=True)
-    _synth_audio_for_story(story, paths, tts_enabled=tts_enabled)
-    if tts_enabled:
-        _sync_micro_story_durations_from_audio(story, paths, save=True)
+    use_tts = (
+        tts_enabled
+        if tts_enabled is not None
+        else cfg_bool("tts", "enabled", default=True)
+    )
+    _synth_audio_for_story(story, paths, tts_enabled=use_tts)
     return StepOkResponse(
         job_id=job_id, 
         quote_id=quote_id, 
@@ -122,130 +204,56 @@ def post_tts(job_id: str, tts_enabled: bool | None = None) -> StepOkResponse:
     )
 
 
-# @app.post("/api/v1/jobs/{job_id}/render", response_model=RenderResponse)
-# def post_render(job_id: str) -> RenderResponse:
-#     """Ghép media + audio + caption thành MP4 (cần fetch-media và tts)."""
-#     paths, meta = _require_job(job_id)
-#     quote_id = str(meta["quote_id"])
-#     story = sync_micro_story_durations_from_audio(paths, save=True)
-#     n = len(story.scenes)
-#     scene_paths = list_scene_media_paths(paths, n)
-#     audio_paths = list_scene_audio_paths(paths, n)
-#     out = render_video(
-#         story,
-#         scene_paths,
-#         audio_paths,
-#         paths,
-#         quote_id=quote_id,
-#     )
-#     root = default_output_dir().resolve()
-#     rel = out.resolve().relative_to(root)
-#     return RenderResponse(
-#         job_id=job_id,
-#         quote_id=quote_id,
-#         video_filename=out.name,
-#         video_rel_path=str(rel),
-#     )
+@app.post("/api/v1/jobs/{job_id}/render", response_model=RenderResponse)
+def post_render(job_id: str) -> RenderResponse:
+    """
+    Cần đã chạy fetch-media và tts.
+    Nối video từng scene → ``rendered/video_final.mp4``, nối audio → ``rendered/audio_final.mp3``,
+    rồi mux thành ``rendered/{slug(quote_id)}.mp4``.
+    """
+    paths, meta = _require_job(job_id)
+    quote_id = str(meta["quote_id"])
+    return _render_job(paths, job_id, quote_id)
 
 
-# @app.post("/api/v1/jobs/{job_id}/upload", response_model=StepOkResponse)
-# def post_upload(job_id: str) -> StepOkResponse:
-#     """Upload MP4 lên YouTube (chỉ khi `youtube.upload: true` trong config / env)."""
-#     paths, meta = _require_job(job_id)
-#     quote_id = str(meta["quote_id"])
-#     allowed = cfg_bool("youtube", "upload", env_legacy="YOUTUBE_UPLOAD", default=False)
-#     if not allowed:
-#         raise HTTPException(
-#             status_code=400,
-#             detail="YouTube upload disabled in config (youtube.upload / YOUTUBE_UPLOAD).",
-#         )
-#     story = load_micro_story(paths)
-#     video_path = paths.rendered_dir / f"{slug(quote_id)}.mp4"
-#     if not video_path.exists():
-#         raise HTTPException(status_code=400, detail="Rendered video missing; run /render first.")
-#     upload_to_youtube(video_path=video_path, story=story)
-#     return StepOkResponse(job_id=job_id, quote_id=quote_id, step="upload", detail="YouTube upload finished")
+@app.post("/api/v1/jobs/{job_id}/upload-youtube", response_model=StepOkResponse)
+def post_upload_youtube(job_id: str) -> StepOkResponse:
+    """
+    Upload ``rendered/{slug(quote_id)}.mp4`` lên YouTube (metadata lấy từ micro story + ``config.yaml``).
+    Bật bằng ``youtube.upload: true``; cần OAuth (``youtube.google_client_secret_path``).
+    """
+    if not cfg_bool("youtube", "upload", default=False):
+        raise HTTPException(
+            status_code=400,
+            detail="YouTube upload disabled in config (youtube.upload).",
+        )
+    paths, meta = _require_job(job_id)
+    quote_id = str(meta["quote_id"])
+    video_path = paths.rendered_dir / f"{slug(quote_id)}.mp4"
+    if not video_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rendered video missing: {video_path.name}. Run POST .../render first.",
+        )
+    story = _load_micro_story(paths)
+    try:
+        video_id = upload_to_youtube(
+            video_path=video_path, story=story, quote_id=quote_id
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HttpError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"YouTube API error: {exc}",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-
-# @app.get("/api/v1/jobs/{job_id}", response_model=JobStatusResponse)
-# def get_job_status(job_id: str) -> JobStatusResponse:
-#     paths, meta = _require_job(job_id)
-#     quote_id = str(meta["quote_id"])
-#     script_path = paths.assets_dir / MICRO_STORY_JSON
-#     has_script = script_path.exists()
-#     n_scenes = 0
-#     if has_script:
-#         try:
-#             n_scenes = len(load_micro_story(paths).scenes)
-#         except Exception:
-#             n_scenes = 0
-#     has_media = False
-#     has_audio = False
-#     if has_script and n_scenes > 0:
-#         try:
-#             list_scene_media_paths(paths, n_scenes)
-#             has_media = True
-#         except FileNotFoundError:
-#             has_media = False
-#         try:
-#             list_scene_audio_paths(paths, n_scenes)
-#             # consider has_audio if at least one real file
-#             has_audio = True
-#             for i in range(n_scenes):
-#                 stem = paths.audio_dir / f"scene_{i:02d}"
-#                 ok = any(
-#                     p.exists() and p.stat().st_size > 0
-#                     for p in (
-#                         stem.with_suffix(".mp3"),
-#                         stem.with_suffix(".wav"),
-#                         paths.audio_dir / f"scene_{i:02d}_silent.mp3",
-#                         paths.audio_dir / f"scene_{i:02d}_silent.wav",
-#                     )
-#                 )
-#                 if not ok:
-#                     has_audio = False
-#                     break
-#         except Exception:
-#             has_audio = False
-#     video_path = paths.rendered_dir / f"{slug(quote_id)}.mp4"
-#     has_video = video_path.exists()
-#     return JobStatusResponse(
-#         job_id=job_id,
-#         quote_id=quote_id,
-#         has_script=has_script,
-#         has_media=has_media,
-#         has_audio=has_audio,
-#         has_video=has_video,
-#         video_filename=video_path.name if has_video else None,
-#     )
-
-
-# @app.get("/api/v1/jobs/{job_id}/video")
-# def get_job_video(job_id: str):
-#     paths, meta = _require_job(job_id)
-#     quote_id = str(meta["quote_id"])
-#     video_path = paths.rendered_dir / f"{slug(quote_id)}.mp4"
-#     if not video_path.exists():
-#         raise HTTPException(status_code=404, detail="Video not rendered yet")
-#     return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
-
-
-# @app.post("/api/v1/pipeline/full", response_model=FullPipelineResponse)
-# def post_pipeline_full(body: FullPipelineRequest) -> FullPipelineResponse:
-#     """
-#     Chạy toàn bộ pipeline cho một hoặc nhiều quote (giống CLI `run`),
-#     ghi ra thư mục output theo `quote_id` (không dùng thư mục `api_jobs`).
-#     """
-#     out = default_output_dir()
-#     items = [q.model_dump() for q in body.quotes]
-#     run_pipeline_for_quotes(
-#         quote_items=items,
-#         out_dir=out,
-#         quote_id=body.quote_id,
-#         use_llm=body.use_llm,
-#         upload=body.upload,
-#     )
-#     ids = [q.id for q in body.quotes]
-#     if body.quote_id:
-#         ids = [body.quote_id]
-#     return FullPipelineResponse(ok=True, output_dir=str(out.resolve()), processed_quote_ids=ids)
+    return StepOkResponse(
+        job_id=job_id,
+        quote_id=quote_id,
+        step="upload-youtube",
+        youtube_video_id=video_id,
+        detail=f"https://www.youtube.com/watch?v={video_id}",
+    )

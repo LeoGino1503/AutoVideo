@@ -17,18 +17,50 @@ from moviepy.video.fx.FadeOut import FadeOut
 from moviepy.video.fx.Loop import Loop
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
-from audio_probe import probe_audio_duration_seconds
-from src.utils.schemas import MicroScene
+from src.microstory.service import _save_micro_story
+from src.video.audio_duration import probe_audio_duration_seconds
+from src.video.ffmpeg import resolve_ffmpeg_executable
+from src.utils.schemas import MicroScene, MicroStory, PipelinePaths
 
 
-def _scene_render_duration(scene: MicroScene, audio_path: Path) -> float:
+def _persist_scene_durations_to_micro_story(
+    *,
+    paths: PipelinePaths,
+    quote_id: str,
+    story: MicroStory,
+    durations_by_index: dict[int, float],
+) -> None:
+    if not durations_by_index:
+        return
+    new_scenes = [
+        (
+            story.scenes[i].model_copy(update={"duration_seconds": durations_by_index[i]})
+            if i in durations_by_index
+            else story.scenes[i]
+        )
+        for i in range(len(story.scenes))
+    ]
+    updated = story.model_copy(update={"scenes": new_scenes})
+    _save_micro_story(paths, updated, quote_id)
+
+
+def _scene_render_duration(
+    scene: MicroScene,
+    audio_path: Path,
+    *,
+    scene_index: int | None = None,
+    probed_durations: dict[int, float] | None = None,
+) -> float:
     if scene.duration_seconds is not None:
         return float(scene.duration_seconds)
     ap = Path(audio_path)
     if ap.exists() and ap.stat().st_size > 0:
         try:
             d = probe_audio_duration_seconds(ap)
-            return max(0.5, min(float(d), 600.0))
+            d_out = max(0.5, min(float(d), 600.0))
+            if scene_index is not None and probed_durations is not None:
+                probed_durations[scene_index] = round(d_out, 3)
+            return d_out
         except Exception:
             pass
     words = max(1, len(scene.narration.split()))
@@ -43,10 +75,11 @@ def _ffmpeg_mux_video_and_audio(
     audio_bitrate: str = "192k",
 ) -> bool:
     """Mux pre-encoded video + WAV (or other audio) into final MP4. Video stream copied."""
-    if shutil.which("ffmpeg") is None:
+    ff = resolve_ffmpeg_executable()
+    if not ff:
         return False
     cmd = [
-        "ffmpeg",
+        ff,
         "-y",
         "-i",
         str(video_in),
@@ -197,6 +230,7 @@ def render_micro_story_video(
     fps: int = 24,
     target_w: int = 1080,
     target_h: int = 1920,
+    persist_micro_story: tuple[PipelinePaths, MicroStory, str] | None = None,
 ) -> Path:
     """
     Render a 9:16 MP4 from image/video + audio micro-scenes.
@@ -206,12 +240,18 @@ def render_micro_story_video(
     if not (len(scene_paths) == len(scenes) == len(audio_paths)):
         raise ValueError("scene_paths, audio_paths, scenes must have same length.")
 
+    probed_for_save: dict[int, float] = {}
     scene_clips: list[VideoClip] = []
     audio_clips = []
     video_sources: list[VideoFileClip] = []
 
     for idx, (media_path, audio_path, scene) in enumerate(zip(scene_paths, audio_paths, scenes)):
-        duration = _scene_render_duration(scene, audio_path)
+        duration = _scene_render_duration(
+            scene,
+            audio_path,
+            scene_index=idx,
+            probed_durations=probed_for_save if persist_micro_story else None,
+        )
 
         if not Path(media_path).exists():
             raise FileNotFoundError(media_path)
@@ -271,7 +311,7 @@ def render_micro_story_video(
             except Exception:
                 pass
 
-    if shutil.which("ffmpeg"):
+    if resolve_ffmpeg_executable():
         try:
             final_video.write_videofile(
                 str(tmp_video),
@@ -305,6 +345,15 @@ def render_micro_story_video(
                 tmp_audio.unlink(missing_ok=True)
             except OSError:
                 pass
+        if persist_micro_story is not None:
+            pth, mstory, qid = persist_micro_story
+            if len(mstory.scenes) == len(scenes):
+                _persist_scene_durations_to_micro_story(
+                    paths=pth,
+                    quote_id=qid,
+                    story=mstory,
+                    durations_by_index=probed_for_save,
+                )
         return out_path
 
     combined = final_video.with_audio(final_audio)
@@ -325,5 +374,186 @@ def render_micro_story_video(
         except Exception:
             pass
 
+    if persist_micro_story is not None:
+        pth, mstory, qid = persist_micro_story
+        if len(mstory.scenes) == len(scenes):
+            _persist_scene_durations_to_micro_story(
+                paths=pth,
+                quote_id=qid,
+                story=mstory,
+                durations_by_index=probed_for_save,
+            )
     return out_path
+
+
+def _ffmpeg_path_for_concat(p: Path) -> str:
+    s = str(p.resolve()).replace("\\", "/").replace("'", "'\\''")
+    return f"file '{s}'"
+
+
+def _run_ffmpeg(ffmpeg_exe: str, args: list[str]) -> None:
+    r = subprocess.run([ffmpeg_exe, *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip()[-2000:]
+        raise RuntimeError(f"ffmpeg failed ({r.returncode}): {ffmpeg_exe} {' '.join(args[:7])}... {err}")
+
+
+def render_final_concat_mux(
+    *,
+    rendered_dir: Path,
+    quote_id: str,
+    media_paths: list[Path],
+    audio_paths: list[Path],
+    target_w: int = 1080,
+    target_h: int = 1920,
+    micro_story: MicroStory | None = None,
+    pipeline_paths: PipelinePaths | None = None,
+    micro_story_quote_id: str | None = None,
+) -> Path:
+    """
+    1) Chuẩn hóa từng scene (độ dài = audio; ảnh/clip ngắn lặp đến đủ) → nối ``video_final.mp4``.
+    2) Nối toàn bộ audio scene → ``audio_final.mp3``.
+    3) Mux hai file final → ``{quote_id}.mp4`` trong ``rendered_dir``.
+    """
+    if len(media_paths) != len(audio_paths):
+        raise ValueError("media_paths and audio_paths must have the same length")
+    if not media_paths:
+        raise ValueError("no scenes to render")
+    ff = resolve_ffmpeg_executable()
+    if not ff:
+        raise RuntimeError(
+            "Không tìm thấy ffmpeg. Cài: sudo apt install ffmpeg (hoặc brew install ffmpeg). "
+            "Hoặc đặt biến môi trường FFMPEG_BINARY=/đường/dẫn/ffmpeg. "
+            "Nếu đã cài moviepy, thường có sẵn binary qua imageio_ffmpeg trong venv."
+        )
+
+    rendered_dir = Path(rendered_dir)
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+    work = rendered_dir / "_concat_work"
+    work.mkdir(exist_ok=True)
+
+    vf = (
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24"
+    )
+
+    norm_segments: list[Path] = []
+    per_scene_audio_durations: list[float] = []
+    try:
+        for i, (media, ap) in enumerate(zip(media_paths, audio_paths)):
+            if not Path(media).exists():
+                raise FileNotFoundError(str(media))
+            if not Path(ap).exists() or Path(ap).stat().st_size == 0:
+                raise FileNotFoundError(f"missing or empty audio: {ap}")
+            d = float(probe_audio_duration_seconds(ap))
+            d = max(0.5, min(d, 600.0))
+            per_scene_audio_durations.append(d)
+            seg = work / f"norm_{i:04d}.mp4"
+            # Short stock clips: loop video to fill scene duration (match narration audio).
+            if media.suffix.lower() == ".mp4":
+                _run_ffmpeg(
+                    ff,
+                    [
+                        "-y",
+                        "-stream_loop",
+                        "-1",
+                        "-i",
+                        str(media),
+                        "-t",
+                        str(d),
+                        "-an",
+                        "-vf",
+                        vf,
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "fast",
+                        "-pix_fmt",
+                        "yuv420p",
+                        str(seg),
+                    ],
+                )
+            else:
+                _run_ffmpeg(
+                    ff,
+                    [
+                        "-y",
+                        "-loop",
+                        "1",
+                        "-i",
+                        str(media),
+                        "-t",
+                        str(d),
+                        "-vf",
+                        vf,
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "fast",
+                        "-pix_fmt",
+                        "yuv420p",
+                        str(seg),
+                    ],
+                )
+            norm_segments.append(seg)
+
+        vlist = work / "video_concat.txt"
+        vlist.write_text("\n".join(_ffmpeg_path_for_concat(p) for p in norm_segments) + "\n", encoding="utf-8")
+        video_final = rendered_dir / "video_final.mp4"
+        _run_ffmpeg(
+            ff,
+            [
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(vlist),
+                "-c",
+                "copy",
+                str(video_final),
+            ],
+        )
+
+        alist = work / "audio_concat.txt"
+        alist.write_text("\n".join(_ffmpeg_path_for_concat(p) for p in audio_paths) + "\n", encoding="utf-8")
+        audio_final = rendered_dir / "audio_final.mp3"
+        _run_ffmpeg(
+            ff,
+            [
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(alist),
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                str(audio_final),
+            ],
+        )
+
+        out_path = rendered_dir / f"{quote_id}.mp4"
+        if not _ffmpeg_mux_video_and_audio(video_final, audio_final, out_path):
+            raise RuntimeError(f"ffmpeg mux failed: {video_final} + {audio_final} -> {out_path}")
+        if (
+            micro_story is not None
+            and pipeline_paths is not None
+            and micro_story_quote_id is not None
+            and len(micro_story.scenes) == len(per_scene_audio_durations)
+        ):
+            by_i = {i: round(per_scene_audio_durations[i], 3) for i in range(len(per_scene_audio_durations))}
+            _persist_scene_durations_to_micro_story(
+                paths=pipeline_paths,
+                quote_id=micro_story_quote_id,
+                story=micro_story,
+                durations_by_index=by_i,
+            )
+        return out_path
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 

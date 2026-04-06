@@ -32,23 +32,33 @@ image:
 
 tts:
   enabled: true
-  default_voice:
+  default:
     voice: vi-VN-HoaiMyNeural
-  # Priority: ElevenLabs when enabled + ELEVENLABS_API_KEY in .env; else Edge TTS.
+    silent_duration: 3.0
+    max_chunk_chars: 2400
+    max_retries: 3
+    min_valid_tts_output_bytes: 1000
+    min_part_bytes: 200
   elevenlabs:
     enabled: true
     voice_id: JBFqnCBsd6RMkjVDRZzb
-    # Thử primary trước; lỗi / output lỗi thì tự động thử secondary.
     model_id_primary: eleven_v3
-    # API dùng gạch dưới, không phải dấu chấm (vd. eleven_turbo_v2_5).
     model_id_secondary: eleven_turbo_v2_5
     output_format: mp3_44100_128
 
 youtube:
-  upload: false
-  client_secret_path: client_secret.json
+  upload: true
+  oauth_local_server_port: 8080
+  google_client_secret_path: ./asset/client_secret_340209588068-vd6h9fognutvhth1ltumi08tbi8gbe2d.apps.googleusercontent.com.json
   channel_id: ""
-  title_prefix: Murphy
-  description: "Daily Murphy's Law micro-story."
-  tags: "murphys law,shorts,viral"
+  title_prefix: "Định Luật Murphy"
+  description: |
+    Chào mừng bạn đến với kênh Podcast sách – nơi những cuốn sách hay được “kể lại” theo cách dễ hiểu, gần gũi và truyền cảm hứng.
+    Tại đây, bạn sẽ tìm thấy:
+    📚 Tóm tắt những cuốn sách nổi tiếng về phát triển bản thân, tư duy, tài chính
+    🧠 Những ý tưởng cốt lõi giúp bạn áp dụng vào cuộc sống
+    🎙️ Nội dung ngắn gọn, dễ nghe – phù hợp khi đang lái xe, làm việc hoặc thư giãn
+    Mỗi video là một hành trình giúp bạn học nhanh hơn, hiểu sâu hơn và sống tốt hơn.
+    Đây là một dự án do con người thực hiện, dành riêng cho giáo dục chất lượng cao.
+  tags: "#podcast #shorts #viral"
   privacy_status: private

@@ -5,13 +5,18 @@ from typing import Any
 import requests
 from src.utils.config_loader import cfg_str, env_api_key, cfg_bool
 from src.utils.schemas import MicroStory, PipelinePaths
-from src.utils.helper import _ensure_dirs
+from src.utils.helper import ensure_dirs
 from pathlib import Path
 
-def _build_micro_story(text: str) -> MicroStory:
+def _build_micro_story(text: str, *, quote_id: str | None = None) -> MicroStory:
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("Input text is empty.")
     fixed_scenes = []
-    text = text.replace("\n", " ")
+    text = raw.replace("\n", " ")
     sentences = _split_sentences(text)
+    if not sentences:
+        raise ValueError("No sentences found in input; cannot build micro story.")
     keywords = _keywords_for_sentences(sentences)
     image_queries = _image_queries_for_sentences(keywords, sentences)
     for i in range(len(sentences)):
@@ -29,6 +34,7 @@ def _build_micro_story(text: str) -> MicroStory:
             }
         )
     return MicroStory(
+        quote_id=quote_id,
         title_hook="",
         voice_text_full=text,
         scenes=fixed_scenes,
@@ -116,7 +122,7 @@ def _image_queries_for_sentences(keywords: list[str], sentences: list[str]) -> l
 
 
 def _save_micro_story(paths: PipelinePaths, story: MicroStory, quote_id: str) -> Path:
-    _ensure_dirs(paths)
+    ensure_dirs(paths)
     p = paths.assets_dir / cfg_str("micro_story", "json_file_name")
     data = {
         "quote_id": quote_id,
@@ -150,28 +156,6 @@ def _extract_json_object(text: str) -> Any:
         except json.JSONDecodeError:
             continue
     raise ValueError("No JSON object/array found in LLM output.")
-
-
-# def _sanitize_micro_story_payload(parsed: Any) -> Any:
-#     """
-#     Normalize/truncate model output before pydantic validation.
-#     Prevents hard failures when providers return overlong strings.
-#     """
-#     if not isinstance(parsed, dict):
-#         return parsed
-#     scenes = parsed.get("scenes")
-#     if not isinstance(scenes, list):
-#         return parsed
-#     for scene in scenes:
-#         if not isinstance(scene, dict):
-#             continue
-#         if isinstance(scene.get("onScreenText"), str):
-#             scene["onScreenText"] = scene["onScreenText"].strip()[:120]
-#         if isinstance(scene.get("imageQuery"), str):
-#             scene["imageQuery"] = scene["imageQuery"].strip()[:200]
-#         if isinstance(scene.get("narration"), str):
-#             scene["narration"] = scene["narration"].strip()
-#     return parsed
 
 
 def _coerce_sentence_idx(idx: Any, n: int) -> int | None:

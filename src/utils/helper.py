@@ -1,3 +1,4 @@
+import re
 import uuid
 from pathlib import Path
 from src.utils.schemas import PipelinePaths
@@ -9,11 +10,16 @@ from typing import Any
 def _create_job_id() -> str:
     return str(uuid.uuid4())
 
+def slug(s: str) -> str:
+    s2 = re.sub(r"[^a-zA-Z0-9_-]+", "_", s).strip("_")
+    return s2[:120] if s2 else "item"
+
 def _make_paths_for_api_job(out_dir: Path, job_id: str) -> PipelinePaths:
     work_dir = out_dir / "job_id" / job_id
     return _paths_under(work_dir)
 
-def _ensure_dirs(paths: PipelinePaths) -> None:
+
+def ensure_dirs(paths: PipelinePaths) -> None:
     for p in [paths.assets_dir, paths.images_dir, paths.audio_dir, paths.rendered_dir]:
         p.mkdir(parents=True, exist_ok=True)
 

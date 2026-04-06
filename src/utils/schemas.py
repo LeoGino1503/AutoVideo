@@ -7,16 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-class InputFiletxt(BaseModel):
-    filename: str
-    content: str
-
-class QuoteIn(BaseModel):
-    id: str
-    quote: str
-    meaning_vi: Optional[str] = None
-
-
 class BuildScriptResponse(BaseModel):
     job_id: str
     quote_id: str
@@ -28,6 +18,7 @@ class StepOkResponse(BaseModel):
     quote_id: str
     step: str
     detail: Optional[str] = None
+    youtube_video_id: Optional[str] = None
 
 
 class RenderResponse(BaseModel):
@@ -37,41 +28,25 @@ class RenderResponse(BaseModel):
     video_rel_path: str
 
 
-class JobStatusResponse(BaseModel):
+class EndToEndPipelineResponse(BaseModel):
+    """Kết quả sau khi chạy build script → fetch-media → TTS → render trong một request."""
+
     job_id: str
     quote_id: str
-    has_script: bool
-    has_media: bool
-    has_audio: bool
-    has_video: bool
-    video_filename: Optional[str] = None
-
-
-class FullPipelineRequest(BaseModel):
-    quotes: list[QuoteIn] = Field(..., min_length=1)
-    quote_id: Optional[str] = None
-    use_llm: bool = True
-    upload: bool = False
-
-
-class FullPipelineResponse(BaseModel):
-    ok: bool
-    output_dir: str
-    processed_quote_ids: list[str]
-
-class QuoteItem(BaseModel):
-    id: str
-    quote: str
-    meaning_vi: Optional[str] = None
+    micro_story: dict[str, Any]
+    video_filename: str
+    video_rel_path: str
 
 
 class MicroScene(BaseModel):
-    # Omitted from ``micro_story.json`` on save; render/TTS infer from audio when None.
+    # When None, render probes audio or estimates from narration length.
     narration: str = Field(..., min_length=1)
     onScreenText: str = Field(..., min_length=1, max_length=120)
     imageQuery: str = Field(..., min_length=1, max_length=200)
+    duration_seconds: Optional[float] = None
 
 class MicroStory(BaseModel):
+    quote_id: Optional[str] = None
     title_hook: Optional[str] = None
     voice_text_full: Optional[str] = None
     scenes: list[MicroScene]

@@ -1,24 +1,26 @@
-"""Audio duration probing (ffprobe / MoviePy)."""
+"""Đo độ dài file âm thanh (ffprobe ưu tiên, fallback MoviePy)."""
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
+
+from src.video.ffmpeg import resolve_ffprobe_executable
 
 
 def probe_audio_duration_seconds(audio_path: Path) -> float:
     """
-    Return duration in seconds for an audio file (MP3/WAV, …).
-    Prefers ``ffprobe``; falls back to MoviePy ``AudioFileClip``.
+    Trả về thời lượng giây (MP3/WAV, …).
+    Ưu tiên ``ffprobe``; không có thì dùng MoviePy ``AudioFileClip``.
     """
     audio_path = Path(audio_path)
     if not audio_path.is_file() or audio_path.stat().st_size == 0:
         raise FileNotFoundError(str(audio_path))
 
-    if shutil.which("ffprobe"):
+    probe = resolve_ffprobe_executable()
+    if probe:
         cmd = [
-            "ffprobe",
+            probe,
             "-v",
             "error",
             "-show_entries",
