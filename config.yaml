@@ -24,6 +24,13 @@ paths:
   # empty: ~/.cache/autovideo/images
   image_cache_dir: ""
 
+# Nhạc nền: nối các file trong bgm_dir theo tên; lặp lại playlist nếu ngắn hơn lời thoại.
+audio:
+  bgm_enabled: true
+  bgm_dir: asset/songs
+  # Hệ số âm lượng nhạc nền khi trộn với TTS (0–1, có thể >1 nếu cần to hơn)
+  bgm_volume: 0.18
+
 micro_story:
   json_file_name: micro_story.json
 
@@ -40,7 +47,7 @@ tts:
     min_valid_tts_output_bytes: 1000
     min_part_bytes: 200
   elevenlabs:
-    enabled: true
+    enabled: false
     voice_id: JBFqnCBsd6RMkjVDRZzb
     model_id_primary: eleven_v3
     model_id_secondary: eleven_turbo_v2_5

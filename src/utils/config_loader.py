@@ -85,6 +85,23 @@ def cfg_bool(*keys: str, env_legacy: Optional[str] = None, default: bool = False
     return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def cfg_float(*keys: str, env_legacy: Optional[str] = None, default: float = 0.0) -> float:
+    if env_legacy:
+        ev = _legacy_env(env_legacy)
+        if ev is not None and str(ev).strip() != "":
+            try:
+                return float(ev)
+            except ValueError:
+                pass
+    v = cfg_raw(*keys, env_legacy=None, default=None)
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def cfg_int(*keys: str, env_legacy: Optional[str] = None, default: int = 0) -> int:
     if env_legacy:
         ev = _legacy_env(env_legacy)

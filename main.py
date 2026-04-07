@@ -3,7 +3,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from utils.schemas import (
+from src.utils.schemas import (
     BuildScriptResponse,
     EndToEndPipelineResponse,
     PipelinePaths,
@@ -27,9 +27,13 @@ from src.utils.helper import (
 from pathlib import Path
 from src.media.pexels_unsplash import ImageProvider
 from src.tts.service import _synth_audio_for_story
-from src.utils.scene_paths import list_scene_audio_paths, list_scene_media_paths
+from src.utils.scene_paths import (
+    list_bgm_song_paths,
+    list_scene_audio_paths,
+    list_scene_media_paths,
+)
 from googleapiclient.errors import HttpError
-from video.render_moviepy import render_final_concat_mux
+from src.video.render_moviepy import render_final_concat_mux
 from src.youtube.upload import upload_to_youtube
 
 load_dotenv()
@@ -43,6 +47,7 @@ def _render_job(paths: PipelinePaths, job_id: str, quote_id: str) -> RenderRespo
     try:
         media_paths = list_scene_media_paths(paths, n)
         audio_paths = list_scene_audio_paths(paths, n)
+        bgm = list_bgm_song_paths()
         out = render_final_concat_mux(
             rendered_dir=paths.rendered_dir,
             quote_id=slug(quote_id),
@@ -51,6 +56,7 @@ def _render_job(paths: PipelinePaths, job_id: str, quote_id: str) -> RenderRespo
             micro_story=story,
             pipeline_paths=paths,
             micro_story_quote_id=quote_id,
+            bgm_song_paths=bgm if bgm else None,
         )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -15,7 +15,7 @@ from src.utils.config_loader import cfg_bool, cfg_int, cfg_raw, cfg_str
 from src.video.ffmpeg import resolve_ffmpeg_executable
 from src.utils.helper import ensure_dirs
 from src.utils.schemas import MicroStory, PipelinePaths
-from tts.elevenlabs_synth import elevenlabs_ready, synth_elevenlabs_to_path
+from src.tts.elevenlabs_synth import elevenlabs_ready, synth_elevenlabs_to_path
 
 log = logging.getLogger(__name__)
 

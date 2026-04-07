@@ -43,6 +43,33 @@ def _youtube_snippet_title(
     return title or "Video"
 
 
+def _format_timestamp_mmss(total_seconds: float) -> str:
+    s = max(0, int(round(total_seconds)))
+    if s < 3600:
+        m, sec = divmod(s, 60)
+        return f"{m:02d}:{sec:02d}"
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}"
+
+
+def _build_scene_timestamps_transcript(story: MicroStory) -> str:
+    """Mỗi dòng: chỉ mốc bắt đầu ``00:00`` + onScreenText."""
+    lines: list[str] = []
+    t = 0.0
+    for sc in story.scenes:
+        d_raw = sc.duration_seconds
+        if d_raw is None or float(d_raw) <= 0:
+            words = max(1, len(sc.narration.split()))
+            d = max(2.0, min(10.0, round(words / 2.4, 2)))
+        else:
+            d = float(d_raw)
+        label = sc.onScreenText.replace("\n", " ").strip() or "…"
+        lines.append(f"{_format_timestamp_mmss(t)} {label}")
+        t += max(0.05, d)
+    return "\n".join(lines)
+
+
 def upload_to_youtube(
     *, video_path: Path, story: MicroStory, quote_id: str | None = None
 ) -> str:
@@ -62,8 +89,11 @@ def upload_to_youtube(
     title = _youtube_snippet_title(
         story=story, title_prefix=title_prefix, quote_id=quote_id
     )
-
-    description = story.youtube_description + cfg_str("youtube", "description", default="") + story.youtube_tags + cfg_str("youtube", "tags", default="#podcast #shorts #viral")
+    transcript = _build_scene_timestamps_transcript(story)
+    extra_story = (story.youtube_description or "").strip()
+    boilerplate = cfg_str("youtube", "description", default="").strip()
+    desc_parts = [p for p in (title, transcript, extra_story, boilerplate) if p]
+    description = "\n\n".join(desc_parts) if desc_parts else "."
     privacy_status = story.youtube_privacy_status or cfg_str(
         "youtube", "privacy_status", default="private"
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,7 @@ from moviepy.video.fx.Loop import Loop
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from src.microstory.service import _save_micro_story
+from src.utils.config_loader import cfg_float
 from src.video.audio_duration import probe_audio_duration_seconds
 from src.video.ffmpeg import resolve_ffmpeg_executable
 from src.utils.schemas import MicroScene, MicroStory, PipelinePaths
@@ -398,6 +400,98 @@ def _run_ffmpeg(ffmpeg_exe: str, args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed ({r.returncode}): {ffmpeg_exe} {' '.join(args[:7])}... {err}")
 
 
+def _bgm_concat_file_line(p: Path) -> str:
+    s = str(p.resolve()).replace("\\", "/").replace("'", "'\\''")
+    return f"file '{s}'"
+
+
+def _expand_song_paths_for_target_duration(
+    song_paths: list[Path], target_sec: float
+) -> list[Path]:
+    if not song_paths or target_sec <= 0:
+        return []
+    durations: list[float] = []
+    for p in song_paths:
+        try:
+            durations.append(float(probe_audio_duration_seconds(p)))
+        except (OSError, ValueError, RuntimeError):
+            durations.append(30.0)
+    cycle = sum(durations)
+    if cycle <= 0:
+        n = max(1, int(math.ceil(target_sec / 30.0)))
+        return song_paths * n
+    n_cycles = max(1, int(math.ceil(target_sec / cycle)))
+    return song_paths * n_cycles
+
+
+def _ffmpeg_build_bgm_trimmed(
+    ffmpeg_exe: str,
+    song_paths: list[Path],
+    target_sec: float,
+    out_path: Path,
+    work_dir: Path,
+) -> None:
+    expanded = _expand_song_paths_for_target_duration(song_paths, target_sec)
+    lst = work_dir / "bgm_concat_list.txt"
+    lst.write_text(
+        "\n".join(_bgm_concat_file_line(p) for p in expanded) + "\n",
+        encoding="utf-8",
+    )
+    _run_ffmpeg(
+        ffmpeg_exe,
+        [
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(lst),
+            "-t",
+            str(max(0.1, target_sec)),
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "160k",
+            str(out_path),
+        ],
+    )
+
+
+def _ffmpeg_mix_narration_and_bgm(
+    ffmpeg_exe: str,
+    narration: Path,
+    bgm: Path,
+    out_path: Path,
+    *,
+    bgm_volume: float,
+) -> None:
+    vol = max(0.0, min(float(bgm_volume), 4.0))
+    flt = (
+        f"[1:a]volume={vol}[bgm];"
+        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+    )
+    _run_ffmpeg(
+        ffmpeg_exe,
+        [
+            "-y",
+            "-i",
+            str(narration),
+            "-i",
+            str(bgm),
+            "-filter_complex",
+            flt,
+            "-map",
+            "[aout]",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            str(out_path),
+        ],
+    )
+
+
 def render_final_concat_mux(
     *,
     rendered_dir: Path,
@@ -409,11 +503,14 @@ def render_final_concat_mux(
     micro_story: MicroStory | None = None,
     pipeline_paths: PipelinePaths | None = None,
     micro_story_quote_id: str | None = None,
+    bgm_song_paths: list[Path] | None = None,
 ) -> Path:
     """
     1) Chuẩn hóa từng scene (độ dài = audio; ảnh/clip ngắn lặp đến đủ) → nối ``video_final.mp4``.
     2) Nối toàn bộ audio scene → ``audio_final.mp3``.
-    3) Mux hai file final → ``{quote_id}.mp4`` trong ``rendered_dir``.
+    3) Nếu có ``bgm_song_paths``: nối/lặp playlist nhạc nền cho đủ dài, cắt đúng thời lượng lời thoại,
+       giảm ``audio.bgm_volume``, trộn với lời thoại → ``audio_final_with_bgm.mp3``.
+    4) Mux video + track audio đã chọn → ``{quote_id}.mp4`` trong ``rendered_dir``.
     """
     if len(media_paths) != len(audio_paths):
         raise ValueError("media_paths and audio_paths must have the same length")
@@ -537,8 +634,20 @@ def render_final_concat_mux(
             ],
         )
 
+        audio_for_mux = audio_final
+        if bgm_song_paths:
+            narr_d = float(probe_audio_duration_seconds(audio_final))
+            bgm_trimmed = work / "bgm_trimmed.mp3"
+            _ffmpeg_build_bgm_trimmed(ff, bgm_song_paths, narr_d, bgm_trimmed, work)
+            audio_mixed = rendered_dir / "audio_final_with_bgm.mp3"
+            bgm_vol = cfg_float("audio", "bgm_volume", default=0.18)
+            _ffmpeg_mix_narration_and_bgm(
+                ff, audio_final, bgm_trimmed, audio_mixed, bgm_volume=bgm_vol
+            )
+            audio_for_mux = audio_mixed
+
         out_path = rendered_dir / f"{quote_id}.mp4"
-        if not _ffmpeg_mux_video_and_audio(video_final, audio_final, out_path):
+        if not _ffmpeg_mux_video_and_audio(video_final, audio_for_mux, out_path):
             raise RuntimeError(f"ffmpeg mux failed: {video_final} + {audio_final} -> {out_path}")
         if (
             micro_story is not None
