@@ -1,6 +1,3 @@
-# AutoVideo: non-secret defaults. API keys live in `.env` only.
-# Override path: env `AUTOVIDEO_CONFIG=/path/to/custom.yaml`
-
 ollama:
   url: http://host.docker.internal:11434
   model: llama3.1:8b

@@ -1,70 +1,93 @@
-# AutoVideo
+## AutoVideo – Auto-render vertical videos for YouTube
 
-AutoVideo biến nội dung text thành video dọc 9:16 theo pipeline tự động:
-- tách nội dung thành micro-scenes (`narration`, `onScreenText`, `imageQuery`)
-- lấy media (ảnh/video stock)
-- TTS theo scene
-- render MP4 + (tuỳ chọn) upload YouTube
+<p align="center">
+  <picture>
+    <img src="./asset/images/29209e46-0ec0-4680-a93b-15c51ac0b971.png" alt="AutoVideo" width="500">
+  </picture>
+</p>
 
-## Quick Start
+AutoVideo turns plain text into 9:16 vertical videos through a fully automated pipeline:
+- split input into micro‑scenes (`narration`, `onScreenText`, `imageQuery`)
+- fetch stock media (photos/videos)
+- generate TTS per scene
+- render MP4 and (optionally) upload to YouTube
 
-### 1) Cài dependencies
+---
+
+## Quick start
+
+### 1) Install dependencies
 
 ```bash
 pip install -r requirements.txt
-pip install -e .
 ```
 
-### 2) Cấu hình
+### 2) Configure the app
 
-- Chỉnh `config.yaml` (không chứa secret)
-- Tạo `.env` để chứa API keys
-- Mặc định output ở `output/`
+- Edit `config.yaml` (no secrets inside).
+- Create a `.env` file for all API keys and secrets.
+- Default output directory is `output/`.
 
-Các mục hay dùng trong `config.yaml`:
-- `pexels.media`: `photo` hoặc `video`
-- `tts.enabled`: bật/tắt TTS
-- `audio.bgm_enabled`: bật/tắt nhạc nền
-- `audio.bgm_dir`: thư mục nhạc nền (mặc định `asset/songs`)
-- `audio.bgm_volume`: âm lượng nhạc nền khi mix với giọng đọc
-- `youtube.upload`: bật/tắt upload YouTube
+Commonly used `config.yaml` options:
+- `pexels.media`: `photo` or `video`
+- `tts.enabled`: enable/disable TTS
+- `audio.bgm_enabled`: enable/disable background music
+- `audio.bgm_dir`: background music folder (default `asset/songs`)
+- `audio.bgm_volume`: background music volume when mixed with narration
+- `youtube.upload`: enable/disable automatic YouTube upload
 
-### 3) Chạy API
+### 3) Run the API server
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Swagger docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+Interactive API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-## Công nghệ sử dụng
+---
 
-**Mặc định đang dùng**
+## Tech stack
+
+**Default**
 - Backend API: `FastAPI`, `Uvicorn`
 - Data model/validation: `Pydantic`
 - Config: `PyYAML`, `python-dotenv`
 - HTTP client: `requests`
-- Video render: `MoviePy`, `ffmpeg`/`ffprobe` (qua `imageio-ffmpeg`)
-- Vẽ text/caption: `Pillow`
-- TTS mặc định: `edge-tts`
-- Media provider: Pexels/Unsplash integration
+- Video rendering: `MoviePy`, `ffmpeg` / `ffprobe` (via `imageio-ffmpeg`)
+- Text/captions: `Pillow`
+- Default TTS: `edge-tts`
+- Media providers: Pexels / Unsplash integration
 - YouTube upload: `google-api-python-client`, `google-auth`, `google-auth-oauthlib`
 
-**Tùy chọn (bật theo config/env)**
-- TTS chất lượng cao: `ElevenLabs` (`elevenlabs`)
-- LLM backend: `Ollama` hoặc `Gemini` cho bước tạo micro-story
+**Optional (config/env‑controlled)**
+- High‑quality TTS: `ElevenLabs` (`elevenlabs`)
+- LLM backend for micro‑story generation: `Ollama` or `Gemini`
 
-## API chính
+---
 
-- `POST /api/v1/jobs/build-script-from-txt`: upload file txt, tạo micro story
-- `POST /api/v1/jobs/full-from-txt`: chạy full pipeline (build -> media -> tts -> render)
+## Main API endpoints
+
+- `POST /api/v1/jobs/build-script-from-txt` – upload a `.txt` file and build a micro‑story
+- `POST /api/v1/jobs/full-from-txt` – run the full pipeline (build → media → TTS → render)
 - `POST /api/v1/jobs/{job_id}/fetch-media`
 - `POST /api/v1/jobs/{job_id}/tts`
 - `POST /api/v1/jobs/{job_id}/render`
 - `POST /api/v1/jobs/{job_id}/upload-youtube`
 
+---
+
 ## Notes
 
-- Nếu YouTube báo `invalid_grant`, xoá token cũ: `~/.cache/murphy_api/youtube/token.json` rồi upload lại để OAuth cấp mới.
-- Nhạc nền sẽ tự nối/lặp playlist trong `audio.bgm_dir` nếu tổng thời lượng bài hát ngắn hơn video.
+- If YouTube returns `invalid_grant`, delete the old token at `~/.cache/murphy_api/youtube/token.json` and try uploading again to refresh OAuth.
+- Background music is automatically looped/concatenated from `audio.bgm_dir` if the playlist is shorter than the final video.
 
+---
+
+## Demo
+
+Demo channel: https://www.youtube.com/@cheatforlife
+<p align="center">
+  <picture>
+    <img src="./asset/images/Screenshot from 2026-04-16 21-06-24.png" alt="AutoVideo" width="500">
+  </picture>
+</p>
