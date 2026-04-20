@@ -31,6 +31,7 @@ pip install -r requirements.txt
 Commonly used `config.yaml` options:
 - `pexels.media`: `photo` or `video`
 - `tts.enabled`: enable/disable TTS
+- `tts.provider`: `auto` / `edge` / `elevenlabs` / `google_chirp3`
 - `audio.bgm_enabled`: enable/disable background music
 - `audio.bgm_dir`: background music folder (default `asset/songs`)
 - `audio.bgm_volume`: background music volume when mixed with narration
@@ -61,7 +62,24 @@ Interactive API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
 **Optional (config/env‑controlled)**
 - High‑quality TTS: `ElevenLabs` (`elevenlabs`)
+- High‑quality TTS: `Google Cloud Chirp 3` (`google-cloud-texttospeech`)
 - LLM backend for micro‑story generation: `Ollama` or `Gemini`
+
+### Google Chirp 3 quick setup (optional)
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Set ADC credentials (service account JSON):
+   ```bash
+   export GOOGLE_APPLICATION_CREDENTIALS="/absolute/path/service-account.json"
+   ```
+3. Update `config.yaml`:
+   - `tts.provider: google_chirp3` (or keep `auto`)
+   - `tts.google_chirp3.enabled: true`
+   - choose `voice_name` + `language_code` (for example `vi-VN-Chirp3-HD-Aoede`, `vi-VN`)
+   - optional region: `global`, `us`, `eu`, `asia-southeast1`, `europe-west2`, `asia-northeast1`
 
 ---
 

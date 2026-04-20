@@ -36,6 +36,8 @@ image:
 
 tts:
   enabled: true
+  # provider: auto | edge | elevenlabs | google_chirp3
+  provider: auto
   default:
     voice: vi-VN-HoaiMyNeural
     silent_duration: 3.0
@@ -49,6 +51,15 @@ tts:
     model_id_primary: eleven_v3
     model_id_secondary: eleven_turbo_v2_5
     output_format: mp3_44100_128
+  google_chirp3:
+    enabled: false 
+    # Example Vietnamese HD voice: vi-VN-Chirp3-HD-Aoede
+    # See Google docs for full voice list by language.
+    voice_name: vi-VN-Chirp3-HD-Leda
+    language_code: vi-VN
+    # global | us | eu | asia-southeast1 | europe-west2 | asia-northeast1
+    region: global
+    max_chunk_chars: 2400
 
 youtube:
   upload: true

@@ -1,1 +1,1 @@
-__all__ = ["service", "elevenlabs_synth"]
+__all__ = ["service", "elevenlabs_synth", "google_chirp3_synth"]

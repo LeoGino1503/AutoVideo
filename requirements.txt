@@ -21,3 +21,6 @@ python-multipart==0.0.22
 
 # ElevenLabs TTS (optional; enable in config.yaml + ELEVENLABS_API_KEY)
 elevenlabs>=1.50.0
+
+# Google Cloud TTS Chirp 3 (optional; enable in config.yaml + ADC credentials)
+google-cloud-texttospeech

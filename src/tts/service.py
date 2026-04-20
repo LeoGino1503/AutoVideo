@@ -16,8 +16,13 @@ from src.video.ffmpeg import resolve_ffmpeg_executable
 from src.utils.helper import ensure_dirs
 from src.utils.schemas import MicroStory, PipelinePaths
 from src.tts.elevenlabs_synth import elevenlabs_ready, synth_elevenlabs_to_path
+from src.tts.google_chirp3_synth import google_chirp3_ready, synth_google_chirp3_to_path
 
 log = logging.getLogger(__name__)
+
+
+def _tts_provider() -> str:
+    return cfg_str("tts", "provider", default="auto").strip().lower()
 
 
 def _tts_default_float(key: str, default: float) -> float:
@@ -245,11 +250,38 @@ def synth_voice_for_text(
     if not chunks:
         return write_silent_track(out_path, silent)
 
-    if elevenlabs_ready():
-        out_path.unlink(missing_ok=True)
-        if synth_elevenlabs_to_path(text, out_path):
-            return out_path
-        log.info("ElevenLabs unavailable or failed; falling back to Edge TTS for %s", out_path.name)
+    provider = _tts_provider()
+    if provider == "elevenlabs":
+        if elevenlabs_ready():
+            out_path.unlink(missing_ok=True)
+            if synth_elevenlabs_to_path(text, out_path):
+                return out_path
+            log.info("ElevenLabs failed; falling back to Edge TTS for %s", out_path.name)
+        else:
+            log.info("ElevenLabs not ready; falling back to Edge TTS for %s", out_path.name)
+    elif provider in {"google", "google_chirp3", "chirp3"}:
+        if google_chirp3_ready():
+            out_path.unlink(missing_ok=True)
+            if synth_google_chirp3_to_path(text, out_path):
+                return out_path
+            log.info("Google Chirp3 failed; falling back to Edge TTS for %s", out_path.name)
+        else:
+            log.info("Google Chirp3 not ready; falling back to Edge TTS for %s", out_path.name)
+    else:
+        # auto mode: ElevenLabs first, then Google Chirp3, then Edge.
+        if elevenlabs_ready():
+            out_path.unlink(missing_ok=True)
+            if synth_elevenlabs_to_path(text, out_path):
+                return out_path
+            log.info(
+                "ElevenLabs unavailable or failed; trying Google Chirp3 for %s",
+                out_path.name,
+            )
+        if google_chirp3_ready():
+            out_path.unlink(missing_ok=True)
+            if synth_google_chirp3_to_path(text, out_path):
+                return out_path
+            log.info("Google Chirp3 unavailable or failed; using Edge TTS for %s", out_path.name)
 
     for attempt in range(max_retries):
         try:
