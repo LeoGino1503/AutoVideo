@@ -7,6 +7,10 @@ gemini:
   model: gemini-3-flash-preview
   enabled: true
 
+llm:
+  # Delay (seconds) before each LLM API request.
+  request_delay_seconds: 10
+
 pexels:
   # photo -> /v1/search (photos); video -> /v1/videos/search
   # media: photo
@@ -30,6 +34,12 @@ audio:
 
 micro_story:
   json_file_name: micro_story.json
+  # Bảo vệ viết tắt (A. s. Lochins, v.v., Dr.) trước khi tách câu theo dấu chấm.
+  protect_abbreviations: true
+  # Gộp segment quá ngắn vào segment trước (tránh scene "s.", "Lochins." riêng).
+  merge_short_scenes: true
+  min_scene_words: 4
+  min_scene_chars: 20
 
 image:
   provider: pexels_unsplash
@@ -41,8 +51,13 @@ tts:
   default:
     voice: vi-VN-HoaiMyNeural
     silent_duration: 3.0
+    # Delay giữa mỗi scene khi gửi request TTS (giảm nguy cơ rate-limit/no-audio).
+    request_delay_seconds: 1.2
+    # Cứ mỗi N scene thì tạm nghỉ thêm để làm mát request burst.
+    batch_pause_every: 10
+    batch_pause_seconds: 8.0
     max_chunk_chars: 2400
-    max_retries: 3
+    max_retries: 10
     min_valid_tts_output_bytes: 1000
     min_part_bytes: 200
   elevenlabs:
@@ -68,6 +83,7 @@ youtube:
   channel_id: ""
   title_prefix: "Định Luật Murphy"
   description: |
+    Mua sách ủng hộ mình nha: https://vt.tiktok.com/ZS9YA8CvajFH3-Ld8Mg/
     Chào mừng bạn đến với kênh Podcast sách – nơi những cuốn sách hay được “kể lại” theo cách dễ hiểu, gần gũi và truyền cảm hứng.
     Tại đây, bạn sẽ tìm thấy:
     📚 Tóm tắt những cuốn sách nổi tiếng về phát triển bản thân, tư duy, tài chính
@@ -77,4 +93,4 @@ youtube:
     Đây là một dự án do con người thực hiện, dành riêng cho giáo dục chất lượng cao.
     Để mua công cụ hãy liên hệ: 0934857195. Hoặc gmail: hoanghoan92nk@gmail.com
   tags: "#podcast #shorts #viral"
-  privacy_status: private
+  privacy_status: public

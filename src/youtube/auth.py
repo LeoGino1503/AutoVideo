@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -12,6 +13,17 @@ from src.utils.config_loader import cfg_int, cfg_str
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+
+
+def _run_oauth_flow(*, client_secret_path: Path) -> Credentials:
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(client_secret_path), scopes=[YOUTUBE_UPLOAD_SCOPE]
+    )
+    # port=0 → redirect random (localhost:51377/…) causes Google Error 400 redirect_uri_mismatch
+    # because that URI is not registered. Use a fixed port and add it in Google Cloud Console.
+    port = cfg_int("youtube", "oauth_local_server_port", env_legacy="YOUTUBE_OAUTH_PORT", default=8080)
+    port = max(1024, min(port, 65535))
+    return flow.run_local_server(port=port, bind_addr="127.0.0.1")
 
 
 def get_youtube_credentials(
@@ -41,18 +53,15 @@ def get_youtube_credentials(
         return creds
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        token_path.write_text(creds.to_json(), encoding="utf-8")
-        return creds
+        try:
+            creds.refresh(Request())
+            token_path.write_text(creds.to_json(), encoding="utf-8")
+            return creds
+        except RefreshError:
+            # Token revoked/expired permanently: remove stale token then re-auth once.
+            token_path.unlink(missing_ok=True)
 
-    flow = InstalledAppFlow.from_client_secrets_file(
-        str(client_secret_path), scopes=[YOUTUBE_UPLOAD_SCOPE]
-    )
-    # port=0 → redirect random (localhost:51377/…) causes Google Error 400 redirect_uri_mismatch
-    # because that URI is not registered. Use a fixed port and add it in Google Cloud Console.
-    port = cfg_int("youtube", "oauth_local_server_port", env_legacy="YOUTUBE_OAUTH_PORT", default=8080)
-    port = max(1024, min(port, 65535))
-    creds = flow.run_local_server(port=port, bind_addr="127.0.0.1")
+    creds = _run_oauth_flow(client_secret_path=client_secret_path)
     token_path.write_text(creds.to_json(), encoding="utf-8")
     return creds
 

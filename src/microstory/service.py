@@ -3,10 +3,11 @@ import json
 import re
 from typing import Any
 import requests
-from src.utils.config_loader import cfg_str, env_api_key, cfg_bool
+from src.utils.config_loader import cfg_str, env_api_key, cfg_bool, cfg_float, cfg_int
 from src.utils.schemas import MicroStory, PipelinePaths
 from src.utils.helper import ensure_dirs
 from pathlib import Path
+import time
 
 def _build_micro_story(text: str, *, quote_id: str | None = None) -> MicroStory:
     raw = (text or "").strip()
@@ -14,7 +15,7 @@ def _build_micro_story(text: str, *, quote_id: str | None = None) -> MicroStory:
         raise ValueError("Input text is empty.")
     fixed_scenes = []
     text = raw.replace("\n", " ")
-    sentences = _split_sentences(text)
+    sentences = _split_and_merge_sentences(text)
     if not sentences:
         raise ValueError("No sentences found in input; cannot build micro story.")
     keywords = _keywords_for_sentences(sentences)
@@ -45,9 +46,118 @@ def _build_micro_story(text: str, *, quote_id: str | None = None) -> MicroStory:
     )
 
 
-def _split_sentences(text):
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [sentence.strip() for sentence in sentences if sentence.strip()]
+# Placeholder for '.' inside abbreviations/initials (restored after sentence split).
+_ABBREV_DOT = "\u00b7"
+
+
+def _split_and_merge_sentences(text: str) -> list[str]:
+    sentences = _split_sentences(text)
+    if cfg_bool("micro_story", "merge_short_scenes", default=True):
+        sentences = _merge_short_segments(sentences)
+    return sentences
+
+
+def _protect_abbreviations(text: str) -> str:
+    """Mask periods that must not act as sentence boundaries."""
+    # Name initials: "A. s. Lochins", "J. F. Kennedy"
+    text = re.sub(
+        r"(?:[A-Z]\.\s+)(?:[a-zà-ỹăâđêôơư]{1,3}\.\s+)+",
+        lambda m: m.group(0).replace(". ", f"{_ABBREV_DOT} ").replace(".", _ABBREV_DOT),
+        text,
+    )
+    # Trailing initial before lowercase dotted initial (e.g. "… Mỹ A. s.")
+    text = re.sub(
+        r"(?:^|[\s\"'(\[])([A-Z])\.\s+(?=[a-zà-ỹăâđêôơư]{1,3}\.)",
+        lambda m: f"{m.group(1)}{m.group(2)}{_ABBREV_DOT} ",
+        text,
+    )
+    # Common dotted abbreviations (v.v., Dr., U.S., …)
+    for pat in (
+        r"\bv\.\s*v\.",
+        r"\b[Vv]\.[Vv]\.",
+        r"\b[Dd]r\.",
+        r"\b[Mm]r\.",
+        r"\b[Mm]rs\.",
+        r"\b[Mm]s\.",
+        r"\b[Pp]rof\.",
+        r"\b[Tt][Ss]\.",
+        r"\b[Tt]h[Ss]\.",
+        r"\b[Pp][Gg][Ss]\.",
+        r"\b[Gg][Ss]\.",
+        r"\bU\.\s*S\.",
+        r"\b[A-Z]\.\s*[A-Z]\.",
+    ):
+        text = re.sub(pat, lambda m: m.group(0).replace(".", _ABBREV_DOT), text, flags=re.IGNORECASE)
+    return text
+
+
+def _restore_abbreviation_dots(text: str) -> str:
+    return text.replace(_ABBREV_DOT, ".")
+
+
+def _split_sentences(text: str) -> list[str]:
+    raw = text.strip()
+    if not raw:
+        return []
+    if cfg_bool("micro_story", "protect_abbreviations", default=True):
+        raw = _protect_abbreviations(raw)
+    sentences = re.split(r"(?<=[.!?])\s+", raw)
+    out: list[str] = []
+    for sentence in sentences:
+        s = _restore_abbreviation_dots(sentence.strip())
+        if s:
+            out.append(s)
+    return out
+
+
+def _merge_short_segments(sentences: list[str]) -> list[str]:
+    if not sentences:
+        return []
+    min_words = max(1, cfg_int("micro_story", "min_scene_words", default=4))
+    min_chars = max(1, cfg_int("micro_story", "min_scene_chars", default=20))
+    merged: list[str] = []
+    for s in sentences:
+        if not merged:
+            merged.append(s)
+            continue
+        prev = merged[-1]
+        if _should_merge_with_previous(prev, s, min_words=min_words, min_chars=min_chars):
+            merged[-1] = _join_narration_segments(prev, s)
+        else:
+            merged.append(s)
+    return merged
+
+
+def _should_merge_with_previous(
+    prev: str,
+    cur: str,
+    *,
+    min_words: int,
+    min_chars: int,
+) -> bool:
+    cur_stripped = cur.strip()
+    prev_stripped = prev.strip()
+    cur_words = len(cur_stripped.split())
+    prev_words = len(prev_stripped.split())
+    cur_chars = len(cur_stripped)
+
+    if cur_words <= 2 and re.fullmatch(r"[a-zà-ỹăâđêôơư]{1,3}\.?", cur_stripped, re.IGNORECASE):
+        return True
+    if prev_words <= min_words or len(prev_stripped) < min_chars:
+        return True
+    if cur_words <= min_words or cur_chars < min_chars:
+        return True
+    if re.search(r"[A-ZĐ]\.\s*$", prev_stripped):
+        return True
+    return False
+
+
+def _join_narration_segments(prev: str, cur: str) -> str:
+    prev = prev.rstrip()
+    cur = cur.lstrip()
+    if prev.endswith((".", "!", "?")) and cur and cur[0].islower():
+        return f"{prev} {cur}"
+    return f"{prev} {cur}"
 
 
 def _keywords_for_sentences(sentences: list[str]) -> list[str]:
@@ -69,19 +179,21 @@ def _keywords_for_sentences(sentences: list[str]) -> list[str]:
     """
     try:
         parsed = _generate_json(prompt)
-        if not isinstance(parsed, list):
-            return [s[:60] for s in sentences]
-        mapped: dict[int, str] = {}
-        for x in parsed:
-            if not isinstance(x, dict):
-                continue
-            idx = _coerce_sentence_idx(x.get("idx"), len(sentences))
-            kw = str(x.get("keyword", "")).strip()
-            if idx is not None and kw:
-                mapped[idx] = kw[:60]
-        return [mapped.get(i, sentences[i][:60]) for i in range(len(sentences))]
-    except Exception:
-        return [s[:60] for s in sentences]
+    except Exception as exc:
+        raise RuntimeError("Failed to generate keywords for sentences.") from exc
+
+    if not isinstance(parsed, list):
+        raise ValueError("Invalid keywords response format: expected a JSON list.")
+
+    mapped: dict[int, str] = {}
+    for x in parsed:
+        if not isinstance(x, dict):
+            continue
+        idx = _coerce_sentence_idx(x.get("idx"), len(sentences))
+        kw = str(x.get("keyword", "")).strip()
+        if idx is not None and kw:
+            mapped[idx] = kw[:60]
+    return [mapped.get(i, sentences[i][:60]) for i in range(len(sentences))]
 
 
 def _image_queries_for_sentences(keywords: list[str], sentences: list[str]) -> list[str]:
@@ -177,6 +289,8 @@ def _coerce_sentence_idx(idx: Any, n: int) -> int | None:
 
 def _generate_json(prompt: str) -> Any:
     """Generate JSON (object or list) via configured LLM provider."""
+    request_delay_seconds = max(0.0, cfg_float("llm", "request_delay_seconds", default=0.0))
+
     if cfg_bool("gemini", "enabled", default=False):
         api_key = env_api_key("GEMINI_API_KEY").strip()
         model = cfg_str("gemini", "model", default="gemini-3-flash-preview")
@@ -187,6 +301,8 @@ def _generate_json(prompt: str) -> Any:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2},
         }
+        if request_delay_seconds > 0:
+            time.sleep(request_delay_seconds)
         r = requests.post(url, json=payload, timeout=90)
         r.raise_for_status()
         out = r.json()
@@ -203,6 +319,8 @@ def _generate_json(prompt: str) -> Any:
         if not ollama_url:
             raise RuntimeError("Missing ollama.url in config.yaml (or OLLAMA_URL in environment).")
         payload = {"model": model, "prompt": prompt, "stream": False, "options": {"temperature": 0.2}}
+        if request_delay_seconds > 0:
+            time.sleep(request_delay_seconds)
         r = requests.post(f"{ollama_url.rstrip('/')}/api/generate", json=payload, timeout=90)
         r.raise_for_status()
         out = r.json()

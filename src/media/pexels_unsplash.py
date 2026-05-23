@@ -91,14 +91,43 @@ class ImageProvider:
         # Distinct cache key so photo/video never collide for same text.
         return self.cache_dir / f"{_hash_text('pexels_video:' + query)}.mp4"
 
+    @staticmethod
+    def _is_valid_mp4_file(path: Path) -> bool:
+        """
+        Lightweight MP4 validation to avoid reusing partial downloads.
+        """
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+
+        min_size = cfg_int("pexels", "video_min_cache_bytes", env_legacy="PEXELS_VIDEO_MIN_CACHE_BYTES", default=32_768)
+        if path.stat().st_size < max(1, min_size):
+            return False
+
+        try:
+            with path.open("rb") as f:
+                header = f.read(64)
+            return b"ftyp" in header
+        except OSError:
+            return False
+
     def _download_to(self, url: str, out_path: Path) -> Path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with requests.get(url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            with out_path.open("wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+        tmp_path = out_path.with_suffix(out_path.suffix + ".part")
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+        try:
+            with requests.get(url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with tmp_path.open("wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+            tmp_path.replace(out_path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
         return out_path
 
     def _search_pexels_photo(self, query: str) -> Optional[ImageSourceResult]:
@@ -257,7 +286,7 @@ class ImageProvider:
             out_path = out_path.with_suffix(".mp4")
 
         cache_path = self._cache_path_for_video_query(query)
-        if cache_path.exists() and cache_path.stat().st_size > 0:
+        if self._is_valid_mp4_file(cache_path):
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(cache_path.read_bytes())
             return out_path
@@ -267,12 +296,16 @@ class ImageProvider:
             return None
         try:
             self._download_to(mp4_url, cache_path)
-            if not cache_path.exists() or cache_path.stat().st_size == 0:
+            if not self._is_valid_mp4_file(cache_path):
+                if cache_path.exists():
+                    cache_path.unlink()
                 return None
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(cache_path.read_bytes())
             return out_path
         except Exception:
+            if cache_path.exists() and not self._is_valid_mp4_file(cache_path):
+                cache_path.unlink()
             return None
 
     def fetch_scene_media(self, query: str, out_path: Path) -> Path:

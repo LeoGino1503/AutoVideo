@@ -43,6 +43,9 @@ def _synth_audio_for_story(
 ) -> list[Path]:
     ensure_dirs(paths)
     silent = _tts_default_float("silent_duration", 3.0)
+    request_delay_seconds = max(0.0, _tts_default_float("request_delay_seconds", 1.2))
+    batch_pause_every = max(1, cfg_int("tts", "default", "batch_pause_every", default=10))
+    batch_pause_seconds = max(0.0, _tts_default_float("batch_pause_seconds", 8.0))
     audio_paths: list[Path] = []
     for idx, scene in enumerate(story.scenes):
         out = paths.audio_dir / f"scene_{idx:02d}.mp3"
@@ -54,9 +57,9 @@ def _synth_audio_for_story(
                 fallback_duration_seconds=silent,
             )
         )
-        time.sleep(0.6)
-        if (idx + 1) % 10 == 0:
-            time.sleep(5.0)
+        time.sleep(request_delay_seconds)
+        if (idx + 1) % batch_pause_every == 0:
+            time.sleep(batch_pause_seconds)
     return audio_paths
 
 
