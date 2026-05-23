@@ -465,11 +465,13 @@ def _ffmpeg_mix_narration_and_bgm(
     out_path: Path,
     *,
     bgm_volume: float,
+    mix_duration: str = "first",
 ) -> None:
     vol = max(0.0, min(float(bgm_volume), 4.0))
+    duration_mode = "longest" if mix_duration == "longest" else "first"
     flt = (
         f"[1:a]volume={vol}[bgm];"
-        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+        f"[0:a][bgm]amix=inputs=2:duration={duration_mode}:dropout_transition=0[aout]"
     )
     _run_ffmpeg(
         ffmpeg_exe,
@@ -508,9 +510,11 @@ def render_final_concat_mux(
     """
     1) Chuẩn hóa từng scene (độ dài = audio; ảnh/clip ngắn lặp đến đủ) → nối ``video_final.mp4``.
     2) Nối toàn bộ audio scene → ``audio_final.mp3``.
-    3) Nếu có ``bgm_song_paths``: nối/lặp playlist nhạc nền cho đủ dài, cắt đúng thời lượng lời thoại,
-       giảm ``audio.bgm_volume``, trộn với lời thoại → ``audio_final_with_bgm.mp3``.
+    3) Nếu có ``bgm_song_paths``: nối/lặp playlist nhạc nền cho đủ dài (kéo thêm
+       ``video.final_scene_hold_seconds`` nếu cấu hình), giảm ``audio.bgm_volume``,
+       trộn với lời thoại → ``audio_final_with_bgm.mp3``.
     4) Mux video + track audio đã chọn → ``{quote_id}.mp4`` trong ``rendered_dir``.
+    Scene cuối có thể giữ thêm ``video.final_scene_hold_seconds`` sau khi TTS hết.
     """
     if len(media_paths) != len(audio_paths):
         raise ValueError("media_paths and audio_paths must have the same length")
@@ -534,6 +538,9 @@ def render_final_concat_mux(
         f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24"
     )
 
+    tail = max(0.0, cfg_float("video", "final_scene_hold_seconds", default=0.0))
+    last_scene_idx = len(media_paths) - 1
+
     norm_segments: list[Path] = []
     per_scene_audio_durations: list[float] = []
     try:
@@ -545,6 +552,7 @@ def render_final_concat_mux(
             d = float(probe_audio_duration_seconds(ap))
             d = max(0.5, min(d, 600.0))
             per_scene_audio_durations.append(d)
+            video_d = d + (tail if i == last_scene_idx else 0.0)
             seg = work / f"norm_{i:04d}.mp4"
             # Short stock clips: loop video to fill scene duration (match narration audio).
             if media.suffix.lower() == ".mp4":
@@ -557,7 +565,7 @@ def render_final_concat_mux(
                         "-i",
                         str(media),
                         "-t",
-                        str(d),
+                        str(video_d),
                         "-an",
                         "-vf",
                         vf,
@@ -580,7 +588,7 @@ def render_final_concat_mux(
                         "-i",
                         str(media),
                         "-t",
-                        str(d),
+                        str(video_d),
                         "-vf",
                         vf,
                         "-c:v",
@@ -637,12 +645,18 @@ def render_final_concat_mux(
         audio_for_mux = audio_final
         if bgm_song_paths:
             narr_d = float(probe_audio_duration_seconds(audio_final))
+            mix_d = narr_d + tail
             bgm_trimmed = work / "bgm_trimmed.mp3"
-            _ffmpeg_build_bgm_trimmed(ff, bgm_song_paths, narr_d, bgm_trimmed, work)
+            _ffmpeg_build_bgm_trimmed(ff, bgm_song_paths, mix_d, bgm_trimmed, work)
             audio_mixed = rendered_dir / "audio_final_with_bgm.mp3"
             bgm_vol = cfg_float("audio", "bgm_volume", default=0.18)
             _ffmpeg_mix_narration_and_bgm(
-                ff, audio_final, bgm_trimmed, audio_mixed, bgm_volume=bgm_vol
+                ff,
+                audio_final,
+                bgm_trimmed,
+                audio_mixed,
+                bgm_volume=bgm_vol,
+                mix_duration="longest" if tail > 0 else "first",
             )
             audio_for_mux = audio_mixed
 

@@ -25,6 +25,10 @@ paths:
   # empty: ~/.cache/autovideo/images
   image_cache_dir: ""
 
+# Scene cuối giữ thêm N giây sau khi TTS hết; nhạc nền kéo dài tương ứng (nếu bật BGM).
+video:
+  final_scene_hold_seconds: 5.0
+
 # Nhạc nền: nối các file trong bgm_dir theo tên; lặp lại playlist nếu ngắn hơn lời thoại.
 audio:
   bgm_enabled: true
